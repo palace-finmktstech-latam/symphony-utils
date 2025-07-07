@@ -1,0 +1,30 @@
+# Ignore any virtual environments named venv or env in any subdirectory
+**/venv/
+**/env/
+
+# Ignore Python bytecode and cache directories everywhere
+**/__pycache__/
+**/*.py[cod]
+**/*.pyo
+**/*.pyd
+
+# Ignore editor/IDE folders (e.g. VS Code, PyCharm) in any folder
+**/.vscode/
+**/.idea/
+
+# Ignore Jupyter checkpoints anywhere
+**/.ipynb_checkpoints/
+
+# Ignore common environment/secret files
+**/.env
+**/*.env
+
+# Ignore system-generated files
+**/.DS_Store
+**/Thumbs.db
+
+# Ignore logs
+**/*.log
+
+# OPTIONAL: Ignore CSV files (if generated, not source)
+**/*.csv
