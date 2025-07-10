@@ -9,6 +9,7 @@ Usage:
 Endpoints:
     GET /trades/{client_id} - Returns last 5 trades for client
     GET /status/{client_id} - Returns client status with traffic lights
+    GET /credit/{client_id} - Returns client credit line utilization
     GET /health - Health check
     GET /stats - API statistics
 """
@@ -35,6 +36,7 @@ app.add_middleware(
 # Global storage
 TRADES = []
 CLIENT_STATUS = []
+CREDIT_LINES = []
 
 def safe_get(row, key, default=""):
     """Safely get value from CSV row, handling None values."""
@@ -42,6 +44,38 @@ def safe_get(row, key, default=""):
     if value is None:
         return default
     return str(value).strip() if value else default
+
+def status_to_emoji(status):
+    """Convert status text to emoji traffic light."""
+    status_lower = status.lower()
+    if status_lower == 'ok':
+        return '🟢'
+    elif status_lower == 'en curso':
+        return '🟡'
+    elif status_lower == 'nok':
+        return '🔴'
+    else:
+        return '⚪'  # Unknown status
+
+def credit_percentage_to_emoji(percentage_str):
+    """Convert credit line percentage to traffic light emoji."""
+    try:
+        percentage = float(percentage_str)
+        if percentage >= 100:
+            return '🔴'  # Red - Over limit
+        elif percentage >= 80:
+            return '🟡'  # Amber - Near limit  
+        else:
+            return '🟢'  # Green - Safe
+    except (ValueError, TypeError):
+        return '⚪'  # Unknown
+
+def parse_date(date_str):
+    """Parse DD/MM/YYYY date string and return as datetime for sorting."""
+    try:
+        return datetime.strptime(date_str, '%d/%m/%Y')
+    except:
+        return datetime.min
 
 def load_trades_from_csv(csv_file="trades.csv"):
     """Load trades from CSV file with proper null handling."""
@@ -185,40 +219,90 @@ def load_client_status_from_csv(csv_file="client_status.csv"):
         CLIENT_STATUS = []
         return False
 
-def status_to_emoji(status):
-    """Convert status text to emoji traffic light."""
-    status_lower = status.lower()
-    if status_lower == 'ok':
-        return '🟢'
-    elif status_lower == 'en curso':
-        return '🟡'
-    elif status_lower == 'nok':
-        return '🔴'
-    else:
-        return '⚪'  # Unknown status
-
-def parse_date(date_str):
-    """Parse DD/MM/YYYY date string and return as datetime for sorting."""
+def load_credit_lines_from_csv(csv_file="credit_lines.csv"):
+    """Load credit lines from CSV file."""
+    global CREDIT_LINES
+    
     try:
-        return datetime.strptime(date_str, '%d/%m/%Y')
-    except:
-        return datetime.min
+        csv_path = Path(__file__).parent / csv_file
+        
+        with open(csv_path, 'r', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+            CREDIT_LINES = []
+            
+            for row_num, row in enumerate(reader, start=2):
+                try:
+                    credit_line = {
+                        'client_id': safe_get(row, 'client_id'),
+                        'client_name': safe_get(row, 'client_name'),
+                        'spot_line_approved': safe_get(row, 'spot_line_approved', '0'),
+                        'spot_line_used': safe_get(row, 'spot_line_used', '0'),
+                        'spot_line_%': safe_get(row, 'spot_line_%', '0'),
+                        'fwd_line_approved': safe_get(row, 'fwd_line_approved', '0'),
+                        'fwd_line_used': safe_get(row, 'fwd_line_used', '0'),
+                        'fwd_line_%': safe_get(row, 'fwd_line_%', '0'),
+                        'deriv_line_approved': safe_get(row, 'deriv_line_approved', '0'),
+                        'deriv_line_used': safe_get(row, 'deriv_line_used', '0'),
+                        'deriv_line_%': safe_get(row, 'deriv_line_%', '0')
+                    }
+                    
+                    # Skip rows with missing critical data
+                    if not credit_line['client_id']:
+                        print(f"⚠️  Skipping credit line row {row_num}: Missing client_id")
+                        continue
+                    
+                    CREDIT_LINES.append(credit_line)
+                    
+                except Exception as e:
+                    print(f"⚠️  Error processing credit line row {row_num}: {e}")
+                    continue
+            
+            print(f"✅ Loaded {len(CREDIT_LINES)} credit lines from {csv_file}")
+            return True
+            
+    except FileNotFoundError:
+        print(f"❌ CSV file not found: {csv_file}")
+        # Create sample credit line data for testing
+        CREDIT_LINES = [
+            {
+                'client_id': '93.685.712-6',
+                'client_name': 'Comercial Metropolitana SA',
+                'spot_line_approved': '1000000',
+                'spot_line_used': '750000',
+                'spot_line_%': '75',
+                'fwd_line_approved': '500000',
+                'fwd_line_used': '425000',
+                'fwd_line_%': '85',
+                'deriv_line_approved': '200000',
+                'deriv_line_used': '210000',
+                'deriv_line_%': '105'
+            }
+        ]
+        print(f"⚠️ Using sample credit line data: {len(CREDIT_LINES)} credit lines")
+        return False
+        
+    except Exception as e:
+        print(f"❌ Error loading credit lines CSV: {e}")
+        CREDIT_LINES = []
+        return False
 
 @app.get("/")
 async def root():
     """Root endpoint with API info."""
     return {
-        "message": "Trades & Status API for Symphony Bot",
+        "message": "Trades, Status & Credit API for Symphony Bot",
         "endpoints": {
             "/trades/{client_id}": "Get last 5 trades for client",
             "/status/{client_id}": "Get client status with traffic lights",
+            "/credit/{client_id}": "Get client credit line utilization",
             "/health": "Health check",
             "/stats": "API statistics",
             "/reload": "Reload data from CSV files"
         },
         "data_loaded": {
             "total_trades": len(TRADES),
-            "total_statuses": len(CLIENT_STATUS)
+            "total_statuses": len(CLIENT_STATUS),
+            "total_credit_lines": len(CREDIT_LINES)
         }
     }
 
@@ -229,6 +313,7 @@ async def health_check():
         "status": "healthy",
         "total_trades": len(TRADES),
         "total_client_statuses": len(CLIENT_STATUS),
+        "total_credit_lines": len(CREDIT_LINES),
         "timestamp": datetime.now().isoformat()
     }
 
@@ -305,18 +390,78 @@ async def get_client_status(client_id: str):
     
     return status_with_emojis
 
-@app.post("/reload")
+@app.get("/credit/{client_id}")
+async def get_client_credit_lines(client_id: str):
+    """Get client credit line utilization with traffic light indicators."""
+    
+    print(f"💳 Request for credit lines: client_id={client_id}")
+    
+    # Find credit lines for this client
+    client_credit = None
+    for credit in CREDIT_LINES:
+        if credit['client_id'] == client_id:
+            client_credit = credit
+            break
+    
+    if not client_credit:
+        print(f"❌ No credit lines found for client {client_id}")
+        # Return unknown/zero credit lines
+        client_credit = {
+            'client_id': client_id,
+            'client_name': 'Unknown',
+            'spot_line_approved': '0',
+            'spot_line_used': '0',
+            'spot_line_%': '0',
+            'fwd_line_approved': '0',
+            'fwd_line_used': '0',
+            'fwd_line_%': '0',
+            'deriv_line_approved': '0',
+            'deriv_line_used': '0',
+            'deriv_line_%': '0'
+        }
+    
+    # Convert percentages to emojis and format display
+    spot_pct = client_credit['spot_line_%']
+    fwd_pct = client_credit['fwd_line_%']
+    deriv_pct = client_credit['deriv_line_%']
+    
+    credit_with_emojis = {
+        'client_id': client_credit['client_id'],
+        'client_name': client_credit['client_name'],
+        'spot_line_approved': client_credit['spot_line_approved'],
+        'spot_line_used': client_credit['spot_line_used'],
+        'spot_line_%': spot_pct,
+        'spot_emoji': credit_percentage_to_emoji(spot_pct),
+        'fwd_line_approved': client_credit['fwd_line_approved'],
+        'fwd_line_used': client_credit['fwd_line_used'],
+        'fwd_line_%': fwd_pct,
+        'fwd_emoji': credit_percentage_to_emoji(fwd_pct),
+        'deriv_line_approved': client_credit['deriv_line_approved'],
+        'deriv_line_used': client_credit['deriv_line_used'],
+        'deriv_line_%': deriv_pct,
+        'deriv_emoji': credit_percentage_to_emoji(deriv_pct),
+        'credit_line': f"{credit_percentage_to_emoji(spot_pct)} Línea Spot ({spot_pct}%)  {credit_percentage_to_emoji(fwd_pct)} Línea Fwd ({fwd_pct}%)  {credit_percentage_to_emoji(deriv_pct)} Línea Derivados ({deriv_pct}%)"
+    }
+    
+    print(f"✅ Returning credit lines for client {client_id}: {credit_with_emojis['credit_line']}")
+    
+    return credit_with_emojis
+
+@app.get("/reload")
 async def reload_data():
     """Reload both trades and status data from CSV files."""
     trades_success = load_trades_from_csv("trades.csv")
     status_success = load_client_status_from_csv("client_status.csv")
+    credit_success = load_credit_lines_from_csv("credit_lines.csv")
     
     return {
         "trades_success": trades_success,
         "status_success": status_success,
+        "credit_success": credit_success,
         "total_trades": len(TRADES),
         "total_statuses": len(CLIENT_STATUS),
-        "message": f"Reload completed - Trades: {'✅' if trades_success else '❌'}, Status: {'✅' if status_success else '❌'}"
+        "total_credit_lines": len(CREDIT_LINES),
+        "message": f"Reload completed - Trades: {'✅' if trades_success else '❌'}, Status: {'✅' if status_success else '❌'}, Credit: {'✅' if credit_success else '❌'}"
     }
 
 @app.get("/stats")
@@ -334,6 +479,9 @@ async def get_stats():
         "status": {
             "total_statuses": len(CLIENT_STATUS),
             "status_breakdown": {}
+        },
+        "credit": {
+            "total_credit_lines": len(CREDIT_LINES)
         }
     }
     
@@ -360,12 +508,13 @@ async def get_stats():
     return stats
 
 if __name__ == "__main__":
-    print("🚀 Starting Enhanced Trades & Status API Server...")
+    print("🚀 Starting Enhanced Trades, Status & Credit API Server...")
     
     # Load data on startup
     print("\n📊 Loading data files...")
     load_trades_from_csv("trades.csv")
     load_client_status_from_csv("client_status.csv")
+    load_credit_lines_from_csv("credit_lines.csv")
     
     print("\n📡 Server will be available at:")
     print("   - Main API: http://127.0.0.1:8001")
@@ -373,6 +522,7 @@ if __name__ == "__main__":
     print("   - Stats: http://127.0.0.1:8001/stats")
     print("   - Example trades: http://127.0.0.1:8001/trades/93.685.712-6")
     print("   - Example status: http://127.0.0.1:8001/status/93.685.712-6")
+    print("   - Example credit: http://127.0.0.1:8001/credit/93.685.712-6")
     print()
     
     # Start the server
