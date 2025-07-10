@@ -16,11 +16,15 @@ Endpoints:
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import csv
+from fastapi.responses import FileResponse
+
 import uvicorn
 from pathlib import Path
 from datetime import datetime
 import json
+import csv
+import os
+
 
 app = FastAPI(title="Trades & Status API", description="API for client trade history and status")
 
@@ -37,6 +41,7 @@ app.add_middleware(
 TRADES = []
 CLIENT_STATUS = []
 CREDIT_LINES = []
+TRADE_DOCUMENTS_DIR = "trade_documents"  # Directory containing trade documents
 
 def safe_get(row, key, default=""):
     """Safely get value from CSV row, handling None values."""
@@ -440,12 +445,48 @@ async def get_client_credit_lines(client_id: str):
         'deriv_line_used': client_credit['deriv_line_used'],
         'deriv_line_%': deriv_pct,
         'deriv_emoji': credit_percentage_to_emoji(deriv_pct),
-        'credit_line': f"{credit_percentage_to_emoji(spot_pct)} Línea Spot ({spot_pct}%)  {credit_percentage_to_emoji(fwd_pct)} Línea Fwd ({fwd_pct}%)  {credit_percentage_to_emoji(deriv_pct)} Línea Derivados ({deriv_pct}%)"
+        'credit_line': f"{credit_percentage_to_emoji(spot_pct)} Spot: {spot_pct}%  {credit_percentage_to_emoji(fwd_pct)} Fwd: {fwd_pct}%  {credit_percentage_to_emoji(deriv_pct)} Derivados: {deriv_pct}%"
     }
     
     print(f"✅ Returning credit lines for client {client_id}: {credit_with_emojis['credit_line']}")
     
     return credit_with_emojis
+
+@app.get("/document/{trade_number}")
+async def get_trade_document(trade_number: str):
+    """Download trade document file by trade number."""
+    
+    print(f"📄 Request for trade document: trade_number={trade_number}")
+    
+    # Ensure the documents directory exists
+    docs_dir = Path(__file__).parent / TRADE_DOCUMENTS_DIR
+    
+    if not docs_dir.exists():
+        print(f"❌ Documents directory not found: {docs_dir}")
+        raise HTTPException(status_code=404, detail="Documents directory not found")
+    
+    # Try different file extensions
+    possible_extensions = ['.pdf', '.doc', '.docx', '.txt', '.xlsx', '.csv']
+    document_path = None
+    
+    for ext in possible_extensions:
+        potential_path = docs_dir / f"{trade_number}{ext}"
+        if potential_path.exists():
+            document_path = potential_path
+            break
+    
+    if not document_path:
+        print(f"❌ No document found for trade {trade_number}")
+        raise HTTPException(status_code=404, detail=f"No document found for trade {trade_number}")
+    
+    print(f"✅ Found document: {document_path}")
+    
+    # Return the file as a download
+    return FileResponse(
+        path=document_path,
+        filename=document_path.name,
+        media_type='application/octet-stream'
+    )
 
 @app.get("/reload")
 async def reload_data():
